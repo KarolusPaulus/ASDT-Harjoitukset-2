@@ -26,6 +26,8 @@ Tavoite:
 
 Testattavat asiat:
 - Useiden säikeiden rinnakkainen käsittely samassa ohjelmassa.
+![1-2](kuvat/1-2.png)
+![2-2](kuvat/2-2.png)
 
 #### Tehtävä 3
 Tavoite:
@@ -36,6 +38,11 @@ Tavoite:
 
 Testattavat asiat:
 - Prosessien välinen writer-synkronointi semaforin avulla.
+![1-3](kuvat/1-3.png)
+![5-3](kuvat/5-3.png)
+![2-3](kuvat/2-3.png)
+![3-3](kuvat/3-3.png)
+![4-3](kuvat/4-3.png)
 
 #### Tehtävä 4
 Tavoite:
@@ -45,5 +52,10 @@ Tavoite:
 
 Testattavat asiat:
 - Säikeiden välinen eksklusiivinen pääsy.
+![1-4](kuvat/1-4.png)
+![2-4](kuvat/2-4.png)
+![3-4](kuvat/3-4.png)
+![4-4](kuvat/4-4.png)
+![5-4](kuvat/5-4.png)
 
 ### SEURAAVA TASO (6p) 5-8
