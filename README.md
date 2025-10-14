@@ -13,6 +13,10 @@ Tavoite:
 Testattavat asiat:
 - Useiden prosessien rinnakkainen käsittely.
 - Yksinkertainen jaetun muistin käyttö prosessien välisessä tiedonvälityksessä.
+![1-1](kuvat/1-1.png)
+![2-1](kuvat/2-1.png)
+![3-1](kuvat/3-1.png)
+![4-1](kuvat/4-1.png)
 
 #### Tehtävä 2
 Tavoite:
