@@ -416,7 +416,7 @@ RotanTulos aloitaRotta(){
     liikkuCount++;
     
     usleep(10);
-} // for //while    
+} // for //while
     
     return RotanTulos{liikkuCount, reitti}; // Palauta liikkujen määrä ja jäljelle jäänyt risteyspino
 }
@@ -463,34 +463,44 @@ void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
     shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
 }
 
+void* rottaSäie(void* arg) {
+    int id = *(int*)arg;
+    cout << "Rotta " << getpid() << " aloittaa liikkumisen!" << endl;
+    RotanTulos tulos = aloitaRotta(); // Jokainen säie liikkuu itsenäisesti
+    cout << "Rotta " << id << " ulkona liikkein: " << tulos.liikkuCount << endl;
+
+    // Tulostetaan reitin sisältö testimielessä!
+    cout << "Rotta " << getpid() << " reitin koko: " << tulos.reitti.size() << endl;
+    
+    for (size_t j = 0; j < tulos.reitti.size(); ++j) {
+        cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
+        << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
+    }
+
+    return nullptr;
+}
+
 int main(){
     
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    // Luo lapsiprosessit
-    pid_t lapset[ROTAT];
+    pthread_t rotat[ROTAT];
+    int idt[ROTAT];
+
+    // Luo säikeet
     for(int i=0;i<ROTAT;i++){
-        pid_t pid = fork(); // Rinnakkainen prosessien luonti
-        if(pid==0){
-            cout << "Rotta " << getpid() << " aloittaa liikkumisen!" << endl;
-            // Lapsiprosessi
-            RotanTulos tulos = aloitaRotta();
-            cout << "Rotta " << getpid() << " ulkona liikkein: " << tulos.liikkuCount << endl;
-
-            // Tulostetaan reitin sisältö testimielessä!
-            cout << "Rotta " << getpid() << " reitin koko: " << tulos.reitti.size() << endl;
-
-            for (size_t j = 0; j < tulos.reitti.size(); ++j) {
-                cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
-                << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
-            }
-
-            _exit(0);
-        } else lapset[i]=pid;
+        idt[i] = i+1;
+        if(pthread_create(&rotat[i], nullptr, rottaSäie, &idt[i]) != 0){
+            perror("pthread_create failed");
+            return 1;
+        }
     }
-    // Parent odottaa kaikkien valmistumista
-    for(int i=0;i<ROTAT;i++) waitpid(lapset[i], nullptr, 0);
+
+    // Odota kaikkien säikeiden valmistumista
+    for(int i=0;i<ROTAT;i++){
+        pthread_join(rotat[i], nullptr);
+    }
     
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
