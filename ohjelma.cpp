@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <cstring> // memcpy
 #include <sys/ipc.h> // ftok
+#include <sys/sem.h> // semget, semop, semctl
 using namespace std;
 
 /*#define KORKEUS 100
@@ -119,6 +120,9 @@ int labyrintti[KORKEUS][LEVEYS] = {
 #define KORKEUS 7
 #define LEVEYS 7
 #define ROTAT 3  // Rottien määrä
+
+int semid;
+int id;
 
 int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
 
@@ -343,10 +347,35 @@ struct RotanTulos {
     vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
 };
 
+void sem_wait_custom(int semid) {
+        struct sembuf op = {0, -1, 0}; // P-operaatio (varaa)
+        semop(semid, &op, 1);
+}
+
+void sem_signal_custom(int semid) {
+        struct sembuf op = {0, 1, 0}; // V-operaatio (vapauta)
+        semop(semid, &op, 1);
+}
+
+// Merkitsee labyrinttiin rotan nykyisen sijainnin käyttäen semaforia
+// Eksklusiivisen pääsyn varmistaminen
+void merkitseLabyrinttiin(Sijainti sij, int id) {
+    sem_wait_custom(semid); // Lukitsee semaforin
+    int yindex = KORKEUS - 1 - sij.ykoord;
+    int xindex = sij.xkoord;
+    if (yindex >= 0 && yindex < KORKEUS && xindex >= 0 && xindex < LEVEYS) {
+        if (labyrintti[yindex][xindex] == 0) // Vain yksi rotta voi olla ruudussa
+            labyrintti[yindex][xindex] = id; // Kirjoittaa jaettuun muistiin
+    }
+    sem_signal_custom(semid); // Vapauttaa semaforin
+}
+
 RotanTulos aloitaRotta(){
+    //DEBUG: cout << "Aloitetaan rotta: " << getpid() << endl;
     int liikkuCount=0;
     vector<Ristaus> reitti;
     Sijainti rotanSijainti = findBegin();
+    //DEBUG: cout << "Rotan aloitussijainti: y=" << rotanSijainti.ykoord << " x=" << rotanSijainti.xkoord << endl;
     LiikkumisSuunta prevDir {DEFAULT};
     LiikkumisSuunta nextDir {DEFAULT};
     
@@ -367,18 +396,23 @@ RotanTulos aloitaRotta(){
         case UP:
         rotanSijainti = moveUp(rotanSijainti);
         prevDir = UP;
+        // Rotta merkitsee labyrinttiin kulkemaansa reittiä
+        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case DOWN:
         rotanSijainti = moveDown(rotanSijainti);
         prevDir = DOWN;
+        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case LEFT:
         rotanSijainti = moveLeft(rotanSijainti);
         prevDir = LEFT;
+        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case RIGHT:
         rotanSijainti = moveRight(rotanSijainti);
         prevDir = RIGHT;
+        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         
         case DEFAULT:
@@ -463,49 +497,52 @@ void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
     shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
 }
 
-void* rottaSäie(void* arg) {
-    int id = *(int*)arg;
-    cout << "Rotta " << getpid() << " aloittaa liikkumisen!" << endl;
-    RotanTulos tulos = aloitaRotta(); // Jokainen säie liikkuu itsenäisesti
-    cout << "Rotta " << id << " ulkona liikkein: " << tulos.liikkuCount << endl;
-
-    // Tulostetaan reitin sisältö testimielessä!
-    cout << "Rotta " << getpid() << " reitin koko: " << tulos.reitti.size() << endl;
-    
-    for (size_t j = 0; j < tulos.reitti.size(); ++j) {
-        cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
-        << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
-    }
-
-    return nullptr;
-}
-
 int main(){
-    
+    //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
+
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    pthread_t rotat[ROTAT];
-    int idt[ROTAT];
-
-    // Luo säikeet
-    for(int i=0;i<ROTAT;i++){
-        idt[i] = i+1;
-        if(pthread_create(&rotat[i], nullptr, rottaSäie, &idt[i]) != 0){
-            perror("pthread_create failed");
-            return 1;
-        }
+    // Semafori joka toimii lukituksena lapsiprosesseille
+    semid = semget(IPC_PRIVATE, 1, IPC_CREAT | 0666);
+    if (semid < 0) {
+        perror("semget failed");
+        return 1;
     }
 
-    // Odota kaikkien säikeiden valmistumista
+    semctl(semid, 0, SETVAL, 1); // Binäärinen semafori
+
+    // Luo lapsiprosessit
+    pid_t lapset[ROTAT];
     for(int i=0;i<ROTAT;i++){
-        pthread_join(rotat[i], nullptr);
+        pid_t pid = fork(); // Rinnakkainen prosessien luonti
+        if(pid==0){
+            // Lapsiprosessi
+            RotanTulos tulos = aloitaRotta();
+            sem_wait_custom(semid);
+            cout << "Rotta " << getpid() << " ulkona liikkein: " << tulos.liikkuCount << endl;
+
+            cout << "Rotta " << getpid() << " reitin koko: " << tulos.reitti.size() << endl;
+            sem_signal_custom(semid);
+    
+            for (size_t j = 0; j < tulos.reitti.size(); ++j) {
+                cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
+                << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
+            }
+            
+            sem_signal_custom(semid);
+            
+            _exit(0);
+        } else lapset[i]=pid;
     }
+    // Parent odottaa kaikkien valmistumista
+    for(int i=0;i<ROTAT;i++) waitpid(lapset[i], nullptr, 0);
     
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
 
     poistaJaettuLabyrintti(jm.shmaddr, jm.shmid); // Vapauta
+    semctl(semid, 0, IPC_RMID);
 
     return 0;
 }
