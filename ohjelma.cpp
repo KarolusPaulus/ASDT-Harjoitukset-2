@@ -165,7 +165,9 @@ struct Karttavirhe {
     string msg;
 };
 
-int aloitaRotta();
+//int aloitaRotta();
+struct RotanTulos;
+RotanTulos aloitaRotta(); // Aloittaa rotan etsinnän labyrintissä
 
 Sijainti etsiKartasta(int kohde){
     Sijainti kartalla;
@@ -272,6 +274,7 @@ bool tutkiRight(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
     return true;
 }
 
+//TÄRKEÄ: älä muuta tätä funktiota suoraan vaan tee omille mahdollisille lisäehdoille oma(t) funktio(t) loogisesti oikeisiin paikkoihin
 LiikkumisSuunta findNext(bool onkoRistaus, Sijainti nykysijainti, LiikkumisSuunta prevDir, auto& reitti){
     if (!onkoRistaus) {        
         if (tutkiLeft(nykysijainti, reitti, prevDir) && prevDir != RIGHT){
@@ -326,6 +329,7 @@ LiikkumisSuunta doRistaus(Sijainti risteyssijainti, LiikkumisSuunta prevDir, aut
     LiikkumisSuunta nextDir; 
     nextDir = findNext(true, risteyssijainti, prevDir, reitti); 
     
+    //TÄRKEÄ: voit vaikuttaa päätöksentekoon, lisää oma toiminnallisuus omaan funktioonsa
     if (nextDir == LEFT) reitti.back().tutkittavana = LEFT;
     else if (nextDir == UP) reitti.back().tutkittavana = UP;
     else if (nextDir == RIGHT) reitti.back().tutkittavana = RIGHT;
@@ -334,7 +338,12 @@ LiikkumisSuunta doRistaus(Sijainti risteyssijainti, LiikkumisSuunta prevDir, aut
     return nextDir;
 }
 
-int aloitaRotta(){
+struct RotanTulos {
+    int liikkuCount;
+    vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
+};
+
+RotanTulos aloitaRotta(){
     int liikkuCount=0;
     vector<Ristaus> reitti;
     Sijainti rotanSijainti = findBegin();
@@ -409,7 +418,7 @@ int aloitaRotta(){
     usleep(10);
 } // for //while    
     
-    return liikkuCount;
+    return RotanTulos{liikkuCount, reitti}; // Palauta liikkujen määrä ja jäljelle jäänyt risteyspino
 }
 
 struct JaettuMuisti {
@@ -464,9 +473,19 @@ int main(){
     for(int i=0;i<ROTAT;i++){
         pid_t pid = fork(); // Rinnakkainen prosessien luonti
         if(pid==0){
+            cout << "Rotta " << getpid() << " aloittaa liikkumisen!" << endl;
             // Lapsiprosessi
-            int liikku = aloitaRotta();
-            cout << "Rotta " << getpid() << " ulkona liikkein: " << liikku << endl;
+            RotanTulos tulos = aloitaRotta();
+            cout << "Rotta " << getpid() << " ulkona liikkein: " << tulos.liikkuCount << endl;
+
+            // Tulostetaan reitin sisältö testimielessä!
+            cout << "Rotta " << getpid() << " reitin koko: " << tulos.reitti.size() << endl;
+
+            for (size_t j = 0; j < tulos.reitti.size(); ++j) {
+                cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
+                << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
+            }
+
             _exit(0);
         } else lapset[i]=pid;
     }
