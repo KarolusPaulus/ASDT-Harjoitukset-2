@@ -118,6 +118,7 @@ int labyrintti[KORKEUS][LEVEYS] = {
 
 #define KORKEUS 7
 #define LEVEYS 7
+#define ROTAT 3  // Rottien määrä
 
 int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
 
@@ -458,7 +459,19 @@ int main(){
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    aloitaRotta();
+    // Luo lapsiprosessit
+    pid_t lapset[ROTAT];
+    for(int i=0;i<ROTAT;i++){
+        pid_t pid = fork(); // Rinnakkainen prosessien luonti
+        if(pid==0){
+            // Lapsiprosessi
+            int liikku = aloitaRotta();
+            cout << "Rotta " << getpid() << " ulkona liikkein: " << liikku << endl;
+            _exit(0);
+        } else lapset[i]=pid;
+    }
+    // Parent odottaa kaikkien valmistumista
+    for(int i=0;i<ROTAT;i++) waitpid(lapset[i], nullptr, 0);
     
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
