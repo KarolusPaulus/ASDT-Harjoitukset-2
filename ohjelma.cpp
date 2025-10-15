@@ -11,9 +11,17 @@
 #include <sys/ipc.h> // ftok
 #include <sys/sem.h> // semget, semop, semctl
 #include <ctime> // nanosleep
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
 using namespace std;
 
-/*#define KORKEUS 100
+// Säikeiden suspend toiminnallisuus ilman signaaleja
+std::mutex mtx;
+std::condition_variable cv;
+std::atomic<bool> paused{false};
+
+#define KORKEUS 100
 #define LEVEYS 100
 int alkuLabyrintti[KORKEUS][LEVEYS] = {
     {1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
@@ -116,28 +124,26 @@ int alkuLabyrintti[KORKEUS][LEVEYS] = {
     {1,0,0,2,0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,2,0,0,0,2,0,0,0,0,0,0,1,0,0,2,0,0,0,0,0,0,1,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,2,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,2,1,1},
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1},
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1},
-};*/
+};
 
-#define KORKEUS 7
-#define LEVEYS 7
+//#define KORKEUS 7
+//#define LEVEYS 7
 #define ROTAT 3  // Rottien määrä
 
-pthread_mutex_t labMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t labMutex = PTHREAD_MUTEX_INITIALIZER; // Labyrintin lukko
 pthread_mutex_t tulostusLukko = PTHREAD_MUTEX_INITIALIZER;
-
-int id;
 
 int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
 
 // Alkuperäinen labyrintti
-int alkuLabyrintti[KORKEUS][LEVEYS] = {
+/*int alkuLabyrintti[KORKEUS][LEVEYS] = {
                         {1,1,1,1,1,1,1},
                         {1,0,1,0,1,0,4},
                         {1,0,1,0,1,0,1},
                         {1,2,0,2,0,2,1},
                         {1,0,1,0,1,0,1},
                         {1,0,1,0,1,0,1},
-                        {1,1,1,3,1,1,1}};
+                        {1,1,1,3,1,1,1}};*/
 
 struct Sijainti {
     int ykoord {0};
@@ -366,6 +372,11 @@ RotanTulos aloitaRotta(){
         //alla vaihtoehtoisesti n-kertainen for-loop testauksia varten
         //    for (int i = 0 ; i < 50 ; i++){
 
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, []{ return !paused.load(); });
+        }
+
         if (labyrintti[KORKEUS-1-rotanSijainti.ykoord][rotanSijainti.xkoord] == 2){
             nextDir = doRistaus(rotanSijainti, prevDir, reitti);
         }
@@ -424,7 +435,7 @@ RotanTulos aloitaRotta(){
 
     liikkuCount++;
     
-    usleep(10);
+    usleep(10000);
 } // for //while
     
     return RotanTulos{liikkuCount, reitti}; // Palauta liikkujen määrä ja jäljelle jäänyt risteyspino
@@ -490,48 +501,65 @@ void tallennaLabyrinttiTiedostoon(const char* tiedostonimi) {
     fclose(tiedosto);
 }
 
+void* rottaSäie(void* arg) {
+    int id = *(int*)arg; // Jokainen säie liikkuu itsenäisesti
+
+    // Mutex lukitsee tulostuksen, jotta se tulee siistimmin ulos
+    pthread_mutex_lock(&tulostusLukko);
+    cout << "Rotta " << id 
+         << " (säie " << pthread_self() << ") aloittaa liikkumisen!" << endl;
+    pthread_mutex_unlock(&tulostusLukko);
+
+    RotanTulos tulos = aloitaRotta();
+
+    pthread_mutex_lock(&tulostusLukko);
+    cout << "Rotta " << id << " valmis liikkein: " << tulos.liikkuCount << endl;
+    pthread_mutex_unlock(&tulostusLukko);
+    for (size_t j = 0; j < tulos.reitti.size(); ++j) {
+        cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
+        << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
+    }
+
+    return nullptr;
+}
+
 int main(){
     //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
     
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    pid_t lapset[ROTAT];
-    for (int i = 0; i < ROTAT; i++) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            RotanTulos tulos = aloitaRotta();
-            cout << "Rotta " << getpid() << " ulkona liikkein: " << tulos.liikkuCount << endl;
-            _exit(0);
-        } else lapset[i] = pid;
-    }
+    pthread_t rotat[ROTAT];
+    int idt[ROTAT];
 
-    // Valokuvaussilmukka
-    struct timespec nukkumisaika = {0, 200000000L};
-    int kaikkiValmiit = 0;
-
-    while (!kaikkiValmiit) {
-        nanosleep(&nukkumisaika, NULL); // Parent nukkuu hetken
-
-        // Jäädytä kaikki lapset
-        for (int i = 0; i < ROTAT; i++) kill(lapset[i], SIGSTOP);
-        
-        // Ota valokuva
-        tallennaLabyrinttiTiedostoon("labyrintti_tilat.txt");
-        cout << "Tallennettu labyrintin tila tiedostoon!" << endl;
-
-        // Jatka lapsia
-        for (int i = 0; i < ROTAT; i++) kill(lapset[i], SIGCONT);
-
-        // Tarkista ovatko kaikki jo lopettaneet
-        kaikkiValmiit = 1;
-        for (int i = 0; i < ROTAT; i++) {
-            int status;
-            pid_t result = waitpid(lapset[i], &status, WNOHANG);
-            if (result == 0) kaikkiValmiit = 0; // vielä käynnissä
+    // Luo säikeet
+    for(int i=0;i<ROTAT;i++){
+        idt[i] = i+1;
+        if(pthread_create(&rotat[i], nullptr, rottaSäie, &idt[i]) != 0){
+            perror("pthread_create failed");
+            return 1;
         }
     }
-    
+
+    // Simuloidaan "pause/jatka" toimintaa
+    for (int kierros = 0; kierros < 3; ++kierros) {
+        sleep(1); // Anna rottien liikkua hetki
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            paused = true;
+        }
+
+        tallennaLabyrinttiTiedostoon("labyrintti_tilat.txt");
+        cout << "Tallennettu labyrintin tila tiedostoon!" << endl;
+        sleep(2); // Jäädytys
+
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            paused = false;
+        }
+        cv.notify_all(); // Jatketaan liikettä
+    }
+
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
 
