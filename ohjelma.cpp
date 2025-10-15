@@ -14,9 +14,8 @@
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
+#include <queue>
 using namespace std;
-
-
 
 #define KORKEUS 100
 #define LEVEYS 100
@@ -128,8 +127,6 @@ int alkuLabyrintti[KORKEUS][LEVEYS] = {
 #define ROTAT 3  // Rottien määrä
 #define BUF_SIZE 5  // Rajattu rengaspuskuri
 
-int semid;
-
 int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
 
 // Alkuperäinen labyrintti
@@ -177,11 +174,14 @@ struct Karttavirhe {
 
 // FIFO puskurin rakenne ja jaettu muisti
 struct Puskuri {
-    int data[BUF_SIZE];
-    int head;
-    int tail;
-    int count;
+    queue<int> data;
+    int count = 0;
+    mutex mtx;
+    condition_variable not_full;
+    condition_variable not_empty;
 };
+
+Puskuri puskuri; // Jaettu rengaspuskuri
 
 //int aloitaRotta();
 struct RotanTulos;
@@ -361,16 +361,6 @@ struct RotanTulos {
     vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
 };
 
-void sem_wait_custom(int semid, int index) {
-    struct sembuf op = {index, -1, 0}; // P-operaatio (varaa)
-    semop(semid, &op, 1);
-}
-
-void sem_signal_custom(int semid, int index) {
-    struct sembuf op = {index, 1, 0}; // V-operaatio (vapauta)
-    semop(semid, &op, 1);
-}
-
 RotanTulos aloitaRotta(){
     //DEBUG: cout << "Aloitetaan rotta: " << getpid() << endl;
     int liikkuCount=0;
@@ -493,61 +483,70 @@ void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
     shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
 }
 
+void* tuottaja(void*) {
+    for (int viesti = 1; viesti <= 9; viesti++) {
+        unique_lock<mutex> lukko(puskuri.mtx);
+
+        // Odota jos puskuri on täynnä
+        puskuri.not_full.wait(lukko, []{ return puskuri.count < BUF_SIZE; });
+
+        // Lisää viesti puskuriin
+        puskuri.data.push(viesti);
+        puskuri.count++;
+        cout << "Parent lähetti viestin: " << viesti << endl;
+
+        lukko.unlock();
+        puskuri.not_empty.notify_one(); // Ilmoita, että dataa on saatavilla
+
+        sleep(1);
+    }
+    return nullptr;
+}
+
+void* rotta(void* arg) {
+    int id = *(int*)arg;
+    for (int i = 0; i < 3; i++) {
+        unique_lock<mutex> lukko(puskuri.mtx);
+
+        // Odota jos puskuri on tyhjä
+        puskuri.not_empty.wait(lukko, []{ return puskuri.count > 0; });
+
+        int viesti = puskuri.data.front();
+        puskuri.data.pop();
+        puskuri.count--;
+        cout << "Rotta " << id << " sai viestin: " << viesti << endl;
+
+        lukko.unlock();
+        puskuri.not_full.notify_one(); // Ilmoita, että yksi paikka vapautui
+
+        sleep(1);
+    }
+    return nullptr;
+}
+
 int main(){
     //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
     
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    // Luo jaettu puskuri ja semaforit
-    int shmid = shmget(IPC_PRIVATE, sizeof(Puskuri), IPC_CREAT | 0666);
-    Puskuri* buf = (Puskuri*) shmat(shmid, NULL, 0);
-    buf->head = buf->tail = buf->count = 0;
+    pthread_t tuottaja_sae;
+    pthread_t rotat[ROTAT];
+    int idt[ROTAT];
 
-    // Semaforit: 0 = mutex, 1 = vapaat paikat, 2 = täytetyt paikat
-    int semid = semget(IPC_PRIVATE, 3, IPC_CREAT | 0666);
-    semctl(semid, 0, SETVAL, 1);
-    semctl(semid, 1, SETVAL, BUF_SIZE);
-    semctl(semid, 2, SETVAL, 0);
+    // Käynnistä säikeet
+    pthread_create(&tuottaja_sae, nullptr, tuottaja, nullptr);
 
-    // Luo rottaprosessit
-    pid_t lapset[ROTAT];
     for (int i = 0; i < ROTAT; i++) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            for (int j = 0; j < 3; j++) {
-                sem_wait_custom(semid, 2); // Odota täytettyä paikkaa
-                sem_wait_custom(semid, 0); // Varaa mutex
-                int viesti = buf->data[buf->tail];
-                buf->tail = (buf->tail + 1) % BUF_SIZE;
-                buf->count--;
-                cout << "Rotta " << getpid() << " sai viestin: " << viesti << endl;
-                sem_signal_custom(semid, 0); // Vapauta mutex
-                sem_signal_custom(semid, 1); // Ilmoita vapautetusta paikasta
-                sleep(1);
-            }
-            _exit(0);
-        } else lapset[i] = pid;
+        idt[i] = i + 1;
+        pthread_create(&rotat[i], nullptr, rotta, &idt[i]);
     }
 
-    // Lähetä viestejä rotille
-    for (int viesti = 1; viesti <= 9; viesti++) {
-        sem_wait_custom(semid, 1);
-        sem_wait_custom(semid, 0);
-        buf->data[buf->head] = viesti;
-        buf->head = (buf->head + 1) % BUF_SIZE;
-        buf->count++;
-        cout << "Parent lähetti viestin: " << viesti << endl;
-        sem_signal_custom(semid, 0);
-        sem_signal_custom(semid, 2);
-        sleep(1);
+    // Odota että kaikki säikeet valmistuvat
+    pthread_join(tuottaja_sae, nullptr);
+    for (int i = 0; i < ROTAT; i++) {
+        pthread_join(rotat[i], nullptr);
     }
-
-    // Odota rottien valmistumista
-    for (int i = 0; i < ROTAT; i++) waitpid(lapset[i], nullptr, 0);
-    shmdt(buf);
-    shmctl(shmid, IPC_RMID, NULL);
-    semctl(semid, 0, IPC_RMID);
 
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
