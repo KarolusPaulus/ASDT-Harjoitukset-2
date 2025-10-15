@@ -129,9 +129,9 @@ int alkuLabyrintti[KORKEUS][LEVEYS] = {
 //#define KORKEUS 7
 //#define LEVEYS 7
 #define ROTAT 3  // Rottien määrä
+#define BUF_SIZE 5  // Rajattu rengaspuskuri
 
-pthread_mutex_t labMutex = PTHREAD_MUTEX_INITIALIZER; // Labyrintin lukko
-pthread_mutex_t tulostusLukko = PTHREAD_MUTEX_INITIALIZER;
+int semid;
 
 int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
 
@@ -176,6 +176,14 @@ struct Ristaus {
 struct Karttavirhe {
     int koodi {0};
     string msg;
+};
+
+// FIFO puskurin rakenne ja jaettu muisti
+struct Puskuri {
+    int data[BUF_SIZE];
+    int head;
+    int tail;
+    int count;
 };
 
 //int aloitaRotta();
@@ -356,6 +364,16 @@ struct RotanTulos {
     vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
 };
 
+void sem_wait_custom(int semid, int index) {
+    struct sembuf op = {index, -1, 0}; // P-operaatio (varaa)
+    semop(semid, &op, 1);
+}
+
+void sem_signal_custom(int semid, int index) {
+    struct sembuf op = {index, 1, 0}; // V-operaatio (vapauta)
+    semop(semid, &op, 1);
+}
+
 RotanTulos aloitaRotta(){
     //DEBUG: cout << "Aloitetaan rotta: " << getpid() << endl;
     int liikkuCount=0;
@@ -371,11 +389,6 @@ RotanTulos aloitaRotta(){
 //        cout << "Olen prosessi: " << prosessi << endl;
         //alla vaihtoehtoisesti n-kertainen for-loop testauksia varten
         //    for (int i = 0 ; i < 50 ; i++){
-
-        {
-            std::unique_lock<std::mutex> lock(mtx);
-            cv.wait(lock, []{ return !paused.load(); });
-        }
 
         if (labyrintti[KORKEUS-1-rotanSijainti.ykoord][rotanSijainti.xkoord] == 2){
             nextDir = doRistaus(rotanSijainti, prevDir, reitti);
@@ -483,82 +496,61 @@ void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
     shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
 }
 
-void tallennaLabyrinttiTiedostoon(const char* tiedostonimi) {
-    FILE* tiedosto = fopen(tiedostonimi, "a");
-    if (!tiedosto) {
-        perror("fopen");
-        return;
-    }
-
-    // Kirjoita labyrintin tila tiedostoon
-    for (int y = 0; y < KORKEUS; y++) {
-        for (int x = 0; x < LEVEYS; x++) {
-            fprintf(tiedosto, "%d ", labyrintti[y][x]);
-        }
-        fprintf(tiedosto, "\n");
-    }
-    fprintf(tiedosto, "\n");
-    fclose(tiedosto);
-}
-
-void* rottaSäie(void* arg) {
-    int id = *(int*)arg; // Jokainen säie liikkuu itsenäisesti
-
-    // Mutex lukitsee tulostuksen, jotta se tulee siistimmin ulos
-    pthread_mutex_lock(&tulostusLukko);
-    cout << "Rotta " << id 
-         << " (säie " << pthread_self() << ") aloittaa liikkumisen!" << endl;
-    pthread_mutex_unlock(&tulostusLukko);
-
-    RotanTulos tulos = aloitaRotta();
-
-    pthread_mutex_lock(&tulostusLukko);
-    cout << "Rotta " << id << " valmis liikkein: " << tulos.liikkuCount << endl;
-    pthread_mutex_unlock(&tulostusLukko);
-    for (size_t j = 0; j < tulos.reitti.size(); ++j) {
-        cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
-        << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
-    }
-
-    return nullptr;
-}
-
 int main(){
     //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
     
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    pthread_t rotat[ROTAT];
-    int idt[ROTAT];
+    // Luo jaettu puskuri ja semaforit
+    int shmid = shmget(IPC_PRIVATE, sizeof(Puskuri), IPC_CREAT | 0666);
+    Puskuri* buf = (Puskuri*) shmat(shmid, NULL, 0);
+    buf->head = buf->tail = buf->count = 0;
 
-    // Luo säikeet
-    for(int i=0;i<ROTAT;i++){
-        idt[i] = i+1;
-        if(pthread_create(&rotat[i], nullptr, rottaSäie, &idt[i]) != 0){
-            perror("pthread_create failed");
-            return 1;
-        }
+    // Semaforit: 0 = mutex, 1 = vapaat paikat, 2 = täytetyt paikat
+    int semid = semget(IPC_PRIVATE, 3, IPC_CREAT | 0666);
+    semctl(semid, 0, SETVAL, 1);
+    semctl(semid, 1, SETVAL, BUF_SIZE);
+    semctl(semid, 2, SETVAL, 0);
+
+    // Luo rottaprosessit
+    pid_t lapset[ROTAT];
+    for (int i = 0; i < ROTAT; i++) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            for (int j = 0; j < 3; j++) {
+                sem_wait_custom(semid, 2); // Odota täytettyä paikkaa
+                sem_wait_custom(semid, 0); // Varaa mutex
+                int viesti = buf->data[buf->tail];
+                buf->tail = (buf->tail + 1) % BUF_SIZE;
+                buf->count--;
+                cout << "Rotta " << getpid() << " sai viestin: " << viesti << endl;
+                sem_signal_custom(semid, 0); // Vapauta mutex
+                sem_signal_custom(semid, 1); // Ilmoita vapautetusta paikasta
+                sleep(1);
+            }
+            _exit(0);
+        } else lapset[i] = pid;
     }
 
-    // Simuloidaan "pause/jatka" toimintaa
-    for (int kierros = 0; kierros < 3; ++kierros) {
-        sleep(1); // Anna rottien liikkua hetki
-        {
-            std::lock_guard<std::mutex> lock(mtx);
-            paused = true;
-        }
-
-        tallennaLabyrinttiTiedostoon("labyrintti_tilat.txt");
-        cout << "Tallennettu labyrintin tila tiedostoon!" << endl;
-        sleep(2); // Jäädytys
-
-        {
-            std::lock_guard<std::mutex> lock(mtx);
-            paused = false;
-        }
-        cv.notify_all(); // Jatketaan liikettä
+    // Lähetä viestejä rotille
+    for (int viesti = 1; viesti <= 9; viesti++) {
+        sem_wait_custom(semid, 1);
+        sem_wait_custom(semid, 0);
+        buf->data[buf->head] = viesti;
+        buf->head = (buf->head + 1) % BUF_SIZE;
+        buf->count++;
+        cout << "Parent lähetti viestin: " << viesti << endl;
+        sem_signal_custom(semid, 0);
+        sem_signal_custom(semid, 2);
+        sleep(1);
     }
+
+    // Odota rottien valmistumista
+    for (int i = 0; i < ROTAT; i++) waitpid(lapset[i], nullptr, 0);
+    shmdt(buf);
+    shmctl(shmid, IPC_RMID, NULL);
+    semctl(semid, 0, IPC_RMID);
 
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
     std::cout << "Kaikki rotat ulkona!" << endl;
