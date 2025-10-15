@@ -10,11 +10,12 @@
 #include <cstring> // memcpy
 #include <sys/ipc.h> // ftok
 #include <sys/sem.h> // semget, semop, semctl
+#include <ctime> // nanosleep
 using namespace std;
 
 /*#define KORKEUS 100
 #define LEVEYS 100
-int labyrintti[KORKEUS][LEVEYS] = {
+int alkuLabyrintti[KORKEUS][LEVEYS] = {
     {1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
     {1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,2,0,2,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,2,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,2,0,0,1,0,0,0,1,0,0,2,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,1,1},
     {1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,0,1,1},
@@ -349,18 +350,6 @@ struct RotanTulos {
     vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
 };
 
-// Eksklusiivinen kirjoitus labyrinttiin
-void merkitseLabyrinttiin(Sijainti sij, int id) {
-    pthread_mutex_lock(&labMutex); // Lukitsee labyrintin kirjoitusta varten
-    int yindex = KORKEUS - 1 - sij.ykoord;
-    int xindex = sij.xkoord;
-    if (yindex >= 0 && yindex < KORKEUS && xindex >= 0 && xindex < LEVEYS) {
-        if (labyrintti[yindex][xindex] == 0)
-            labyrintti[yindex][xindex] = id; // Kirjoittaa jaettuun muistiin
-    }
-    pthread_mutex_unlock(&labMutex); // Vapauttaa lukon
-}
-
 RotanTulos aloitaRotta(){
     //DEBUG: cout << "Aloitetaan rotta: " << getpid() << endl;
     int liikkuCount=0;
@@ -376,7 +365,7 @@ RotanTulos aloitaRotta(){
 //        cout << "Olen prosessi: " << prosessi << endl;
         //alla vaihtoehtoisesti n-kertainen for-loop testauksia varten
         //    for (int i = 0 ; i < 50 ; i++){
-        
+
         if (labyrintti[KORKEUS-1-rotanSijainti.ykoord][rotanSijainti.xkoord] == 2){
             nextDir = doRistaus(rotanSijainti, prevDir, reitti);
         }
@@ -387,23 +376,18 @@ RotanTulos aloitaRotta(){
         case UP:
         rotanSijainti = moveUp(rotanSijainti);
         prevDir = UP;
-        // Rotta merkitsee labyrinttiin kulkemaansa reittiä
-        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case DOWN:
         rotanSijainti = moveDown(rotanSijainti);
         prevDir = DOWN;
-        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case LEFT:
         rotanSijainti = moveLeft(rotanSijainti);
         prevDir = LEFT;
-        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         case RIGHT:
         rotanSijainti = moveRight(rotanSijainti);
         prevDir = RIGHT;
-        merkitseLabyrinttiin(rotanSijainti, getpid() % 100);
         break;
         
         case DEFAULT:
@@ -488,46 +472,64 @@ void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
     shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
 }
 
-void* rottaSäie(void* arg) {
-    int id = *(int*)arg; // Jokainen säie liikkuu itsenäisesti
-
-    // Mutex lukitsee tulostuksen, jotta se tulee siistimmin ulos
-    pthread_mutex_lock(&tulostusLukko);
-    cout << "Rotta " << id 
-         << " (säie " << pthread_self() << ") aloittaa liikkumisen!" << endl;
-    pthread_mutex_unlock(&tulostusLukko);
-
-    RotanTulos tulos = aloitaRotta();
-
-    pthread_mutex_lock(&tulostusLukko);
-    cout << "Rotta " << id << " valmis liikkein: " << tulos.liikkuCount << endl;
-    pthread_mutex_unlock(&tulostusLukko);
-    for (size_t j = 0; j < tulos.reitti.size(); ++j) {
-        cout << "  Risteys " << j << ": (" << tulos.reitti[j].kartalla.ykoord 
-        << "," << tulos.reitti[j].kartalla.xkoord << ")" << endl;
+void tallennaLabyrinttiTiedostoon(const char* tiedostonimi) {
+    FILE* tiedosto = fopen(tiedostonimi, "a");
+    if (!tiedosto) {
+        perror("fopen");
+        return;
     }
 
-    return nullptr;
+    // Kirjoita labyrintin tila tiedostoon
+    for (int y = 0; y < KORKEUS; y++) {
+        for (int x = 0; x < LEVEYS; x++) {
+            fprintf(tiedosto, "%d ", labyrintti[y][x]);
+        }
+        fprintf(tiedosto, "\n");
+    }
+    fprintf(tiedosto, "\n");
+    fclose(tiedosto);
 }
 
 int main(){
     //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
-
+    
     JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
     if (!jm.shmaddr) return 1; // Virhe luonnissa
 
-    pthread_t rotat[ROTAT];
-    int idt[ROTAT];
-
-    // Luo säikeet
-    for(int i=0;i<ROTAT;i++){
-        idt[i] = i+1;
-        pthread_create(&rotat[i], nullptr, rottaSäie, &idt[i]);
+    pid_t lapset[ROTAT];
+    for (int i = 0; i < ROTAT; i++) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            RotanTulos tulos = aloitaRotta();
+            cout << "Rotta " << getpid() << " ulkona liikkein: " << tulos.liikkuCount << endl;
+            _exit(0);
+        } else lapset[i] = pid;
     }
 
-    // Odota kaikkien säikeiden valmistumista
-    for(int i=0;i<ROTAT;i++){
-        pthread_join(rotat[i], nullptr);
+    // Valokuvaussilmukka
+    struct timespec nukkumisaika = {0, 200000000L};
+    int kaikkiValmiit = 0;
+
+    while (!kaikkiValmiit) {
+        nanosleep(&nukkumisaika, NULL); // Parent nukkuu hetken
+
+        // Jäädytä kaikki lapset
+        for (int i = 0; i < ROTAT; i++) kill(lapset[i], SIGSTOP);
+        
+        // Ota valokuva
+        tallennaLabyrinttiTiedostoon("labyrintti_tilat.txt");
+        cout << "Tallennettu labyrintin tila tiedostoon!" << endl;
+
+        // Jatka lapsia
+        for (int i = 0; i < ROTAT; i++) kill(lapset[i], SIGCONT);
+
+        // Tarkista ovatko kaikki jo lopettaneet
+        kaikkiValmiit = 1;
+        for (int i = 0; i < ROTAT; i++) {
+            int status;
+            pid_t result = waitpid(lapset[i], &status, WNOHANG);
+            if (result == 0) kaikkiValmiit = 0; // vielä käynnissä
+        }
     }
     
     //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
