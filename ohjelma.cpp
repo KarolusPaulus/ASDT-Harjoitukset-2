@@ -16,10 +16,7 @@
 #include <atomic>
 using namespace std;
 
-// Säikeiden suspend toiminnallisuus ilman signaaleja
-std::mutex mtx;
-std::condition_variable cv;
-std::atomic<bool> paused{false};
+
 
 #define KORKEUS 100
 #define LEVEYS 100
