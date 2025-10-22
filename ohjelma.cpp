@@ -174,7 +174,9 @@ struct Karttavirhe {
 
 // FIFO puskurin rakenne ja jaettu muisti
 struct Puskuri {
-    queue<int> data;
+    int data[BUF_SIZE];
+    int head = 0;
+    int tail = 0;
     int count = 0;
     mutex mtx;
     condition_variable not_full;
@@ -491,7 +493,8 @@ void* tuottaja(void*) {
         puskuri.not_full.wait(lukko, []{ return puskuri.count < BUF_SIZE; });
 
         // Lisää viesti puskuriin
-        puskuri.data.push(viesti);
+        puskuri.data[puskuri.head] = viesti;
+        puskuri.head = (puskuri.head + 1) % BUF_SIZE;
         puskuri.count++;
         cout << "Parent lähetti viestin: " << viesti << endl;
 
@@ -511,8 +514,9 @@ void* rotta(void* arg) {
         // Odota jos puskuri on tyhjä
         puskuri.not_empty.wait(lukko, []{ return puskuri.count > 0; });
 
-        int viesti = puskuri.data.front();
-        puskuri.data.pop();
+        // Lue viesti rengaspuskurista
+        int viesti = puskuri.data[puskuri.tail];
+        puskuri.tail = (puskuri.tail + 1) % BUF_SIZE;
         puskuri.count--;
         cout << "Rotta " << id << " sai viestin: " << viesti << endl;
 
