@@ -5,6 +5,7 @@ Toinen osa Advanced Software Development Techniques -kurssin tehtävistä
 ### PERUSASIAT (8p) 1-4
 
 #### Tehtävä 1
+Pistetavoite: 2p
 Tavoite:
 - Toteuta rinnakkainen ohjelma, jossa rotat (lapsiprosessit) liikkuvat itsenäisesti labyrintissa.
 - Pääprosessi (parent) odottaa kaikkien rottien saavuttavan suuaukon.
@@ -19,6 +20,7 @@ Testattavat asiat:
 ![4-1](kuvat/4-1.png)
 
 #### Tehtävä 2
+Pistetavoite: 2p
 Tavoite:
 - Toteuta ohjelma, jossa rotat (säikeet) liikkuvat itsenäisesti labyrintissa.
 - Main-säie odottaa kaikkien säikeiden valmistumista (rottien pääsy suuaukolle).
@@ -30,6 +32,7 @@ Testattavat asiat:
 ![2-2](kuvat/2-2.png)
 
 #### Tehtävä 3
+Pistetavoite: 2p
 Tavoite:
 - Toteuta prosessien välinen jaettu muisti, joka sisältää labyrintin kokoisen sijaintikartan.
 - Rotat (prosessit) merkitsevät oman sijaintinsa tähän karttaan.
@@ -45,6 +48,7 @@ Testattavat asiat:
 ![4-3](kuvat/4-3.png)
 
 #### Tehtävä 4
+Pistetavoite: 2p
 Tavoite:
 - Toteuta säikeiden välinen versio labyrintin kokoiselle sijaintikartalle.
 - Kartta pysyy koko ajan ajantasaisena, kun rotat liikkuvat.
@@ -61,6 +65,7 @@ Testattavat asiat:
 ### SEURAAVA TASO (6p) 5-8
 
 #### Tehtävä 5
+Pistetavoite: 2p
 Tavoite:
 - Toteuta toimiva prosessien suspend-toiminnallisuus jäädytetyn labyrinttitilanteen talteenottamiseksi.
 - Parent-prosessi jäädyttää kaikki lapsiprosessit määräajoin, tallentaa labyrintin sijaintikartan tiedostoon ja jatkaa prosessien suoritusta.
@@ -75,6 +80,7 @@ Testattavat asiat:
 ![2-5](kuvat/2-5.png)
 
 #### Tehtävä 6
+Pistetavoite: 2p
 Tavoite:
 - Toteuta säikeiden suspend-toiminnallisuus ilman signaaleja.
 - Pääsäie toimii ohjaavana säikeenä kuten prosessiesimerkissä.
@@ -92,6 +98,7 @@ Testattavat asiat:
 ![6-6](kuvat/6-6.png)
 
 #### Tehtävä 7
+Pistetavoite: 1p
 Tavoite:
 - Toteuta toimiva FIFO rajattu rengaspuskuri (bounded buffer) prosessien välille.
 - Puskuri toimii jaetussa muistissa, ja sitä käytetään esim. viestien välittämiseen parent-prosessin ja lapsiprosessien välillä (producer–consumer-malli).
@@ -107,6 +114,7 @@ Testattavat asiat:
 ![4-7](kuvat/4-7.png)
 
 #### Tehtävä 8
+Pistetavoite: 1p
 Tavoite:
 - Toteuta toimiva FIFO rajattu rengaspuskuri (bounded buffer) säikeiden välillä.
 - Käytä säikeiden välisiä synkronointimekanismeja (mutex, condition_variable).
