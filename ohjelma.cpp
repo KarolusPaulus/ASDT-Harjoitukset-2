@@ -7,19 +7,11 @@
 #include <sys/wait.h>
 #include <semaphore.h>
 #include <pthread.h>
-#include <cstring> // memcpy
-#include <sys/ipc.h> // ftok
-#include <sys/sem.h> // semget, semop, semctl
-#include <ctime> // nanosleep
-#include <condition_variable>
-#include <mutex>
-#include <atomic>
-#include <queue>
 using namespace std;
 
 #define KORKEUS 100
 #define LEVEYS 100
-int alkuLabyrintti[KORKEUS][LEVEYS] = {
+int labyrintti[KORKEUS][LEVEYS] = {
     {1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
     {1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,2,0,2,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,2,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,2,0,0,1,0,0,0,1,0,0,2,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,1,1},
     {1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,0,1,1},
@@ -122,23 +114,6 @@ int alkuLabyrintti[KORKEUS][LEVEYS] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1},
 };
 
-//#define KORKEUS 7
-//#define LEVEYS 7
-#define ROTAT 3  // Rottien määrä
-#define BUF_SIZE 5  // Rajattu rengaspuskuri
-
-int (*labyrintti)[LEVEYS]; // Pointteri labyrinttiin
-
-// Alkuperäinen labyrintti
-/*int alkuLabyrintti[KORKEUS][LEVEYS] = {
-                        {1,1,1,1,1,1,1},
-                        {1,0,1,0,1,0,4},
-                        {1,0,1,0,1,0,1},
-                        {1,2,0,2,0,2,1},
-                        {1,0,1,0,1,0,1},
-                        {1,0,1,0,1,0,1},
-                        {1,1,1,3,1,1,1}};*/
-
 struct Sijainti {
     int ykoord {0};
     int xkoord {0};
@@ -172,22 +147,7 @@ struct Karttavirhe {
     string msg;
 };
 
-// FIFO puskurin rakenne ja jaettu muisti
-struct Puskuri {
-    int data[BUF_SIZE];
-    int head = 0;
-    int tail = 0;
-    int count = 0;
-    mutex mtx;
-    condition_variable not_full;
-    condition_variable not_empty;
-};
-
-Puskuri puskuri; // Jaettu rengaspuskuri
-
-//int aloitaRotta();
-struct RotanTulos;
-RotanTulos aloitaRotta(); // Aloittaa rotan etsinnän labyrintissä
+int aloitaRotta();
 
 Sijainti etsiKartasta(int kohde){
     Sijainti kartalla;
@@ -221,15 +181,12 @@ bool tutkiUp(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
         ristaus.down.tutkittu = true;
         ristaus.down.jatkom = OPENING;
         reitti.push_back(ristaus);
-// debuggausapuja..:
-//        for (auto rist : reitti){
-//            cout << "Risteys: " << rist.kartalla.ykoord << "," << rist.kartalla.xkoord << endl;
-//        }
+
         return true;
     }
     return true;
 }
-//..alapuolella
+
 bool tutkiDown(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
     int yindex = KORKEUS-1-nykysijainti.ykoord+1;
     if (yindex > KORKEUS-1) return false;
@@ -242,21 +199,18 @@ bool tutkiDown(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
         ristaus.up.tutkittu = true;
         ristaus.up.jatkom = OPENING;
         reitti.push_back(ristaus);
-//        for (auto rist : reitti){
-//            cout << "Risteys: " << rist.kartalla.ykoord << "," << rist.kartalla.xkoord << endl;
-//        }
+
         return true;
     }
     return true;
 }
 
-//..vasemmalla
 bool tutkiLeft(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
     int yindex = KORKEUS-1-nykysijainti.ykoord;
     int xindex = nykysijainti.xkoord-1;
     if (xindex < 0) return false;
     if (labyrintti[yindex][xindex] == 1) return false;
-    
+ 
     if (labyrintti[yindex][xindex] == 2 && prevDir != RIGHT){
         Ristaus ristaus;
         ristaus.kartalla.ykoord = nykysijainti.ykoord;
@@ -264,15 +218,12 @@ bool tutkiLeft(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
         ristaus.right.tutkittu = true;
         ristaus.right.jatkom = OPENING;
         reitti.push_back(ristaus);
-//        for (auto rist : reitti){
-//            cout << "Risteys: " << rist.kartalla.ykoord << "," << rist.kartalla.xkoord << endl;
-//        }
+
         return true;
     }
     return true;
 }
 
-//..oikealla
 bool tutkiRight(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
     int yindex = KORKEUS-1-nykysijainti.ykoord;
     int xindex = nykysijainti.xkoord+1;
@@ -286,15 +237,12 @@ bool tutkiRight(Sijainti nykysijainti, auto& reitti, LiikkumisSuunta prevDir){
         ristaus.left.tutkittu = true;
         ristaus.left.jatkom = OPENING;
         reitti.push_back(ristaus);
-//        for (auto rist : reitti){
-//            cout << "Risteys: " << rist.kartalla.ykoord << "," << rist.kartalla.xkoord << endl;
-//        }
+
         return true;
     }
     return true;
 }
 
-//TÄRKEÄ: älä muuta tätä funktiota suoraan vaan tee omille mahdollisille lisäehdoille oma(t) funktio(t) loogisesti oikeisiin paikkoihin
 LiikkumisSuunta findNext(bool onkoRistaus, Sijainti nykysijainti, LiikkumisSuunta prevDir, auto& reitti){
     if (!onkoRistaus) {        
         if (tutkiLeft(nykysijainti, reitti, prevDir) && prevDir != RIGHT){
@@ -348,8 +296,7 @@ Sijainti moveRight(Sijainti nykysijainti){
 LiikkumisSuunta doRistaus(Sijainti risteyssijainti, LiikkumisSuunta prevDir, auto& reitti){
     LiikkumisSuunta nextDir; 
     nextDir = findNext(true, risteyssijainti, prevDir, reitti); 
-    
-    //TÄRKEÄ: voit vaikuttaa päätöksentekoon, lisää oma toiminnallisuus omaan funktioonsa
+
     if (nextDir == LEFT) reitti.back().tutkittavana = LEFT;
     else if (nextDir == UP) reitti.back().tutkittavana = UP;
     else if (nextDir == RIGHT) reitti.back().tutkittavana = RIGHT;
@@ -358,33 +305,20 @@ LiikkumisSuunta doRistaus(Sijainti risteyssijainti, LiikkumisSuunta prevDir, aut
     return nextDir;
 }
 
-struct RotanTulos {
-    int liikkuCount;
-    vector<Ristaus> reitti;  // Jäljelle jäänyt risteyspino
-};
-
-RotanTulos aloitaRotta(){
-    //DEBUG: cout << "Aloitetaan rotta: " << getpid() << endl;
+int aloitaRotta(){
     int liikkuCount=0;
     vector<Ristaus> reitti;
     Sijainti rotanSijainti = findBegin();
-    //DEBUG: cout << "Rotan aloitussijainti: y=" << rotanSijainti.ykoord << " x=" << rotanSijainti.xkoord << endl;
     LiikkumisSuunta prevDir {DEFAULT};
     LiikkumisSuunta nextDir {DEFAULT};
-    
+
     while (labyrintti[KORKEUS-1-rotanSijainti.ykoord][rotanSijainti.xkoord] != 4) {
-//DEBUGAUSAPUJA..getpid() palauttaa ajajan
-//        pid_t prosessi = getpid();
-//        cout << "Olen prosessi: " << prosessi << endl;
-        //alla vaihtoehtoisesti n-kertainen for-loop testauksia varten
-        //    for (int i = 0 ; i < 50 ; i++){
 
         if (labyrintti[KORKEUS-1-rotanSijainti.ykoord][rotanSijainti.xkoord] == 2){
             nextDir = doRistaus(rotanSijainti, prevDir, reitti);
         }
 
         else nextDir = findNext(false /* ei risteys */, rotanSijainti, prevDir, reitti);
-        
         switch (nextDir) {
         case UP:
         rotanSijainti = moveUp(rotanSijainti);
@@ -402,7 +336,6 @@ RotanTulos aloitaRotta(){
         rotanSijainti = moveRight(rotanSijainti);
         prevDir = RIGHT;
         break;
-        
         case DEFAULT:
         cout << "Umpikuja: " << "Ruutu: " << rotanSijainti.ykoord << "," << rotanSijainti.xkoord << endl; 
         rotanSijainti.ykoord = reitti.back().kartalla.ykoord;
@@ -432,130 +365,16 @@ RotanTulos aloitaRotta(){
         } 
         break;
     }
-//DEBUGGAUSAPUJA
-    //    cout << "Rotan sijainti nyt: " << rotanSijainti.ykoord << "," << rotanSijainti.xkoord << endl;
 
     liikkuCount++;
-    
-    usleep(10000);
-} // for //while
-    
-    return RotanTulos{liikkuCount, reitti}; // Palauta liikkujen määrä ja jäljelle jäänyt risteyspino
+
+    usleep(10);
 }
-
-struct JaettuMuisti {
-    void* shmaddr;
-    int shmid;
-};
-
-// Jaetun muistin luonti ja labyrintin kopiointi sinne
-// Palauttaa jaetun muistin osoitteen ja ID:n
-JaettuMuisti luoJaettuLabyrintti() {
-    size_t size = sizeof(int) * KORKEUS * LEVEYS;
-    int shmid = shmget(IPC_PRIVATE, size, IPC_CREAT | 0666);
-    if (shmid < 0) {
-        perror("shmget failed");
-        return {nullptr, -1};
-    }
-
-    // Liitetään jaettu muisti prosessin osoiteavaruuteen
-    void* shmaddr = shmat(shmid, NULL, 0);
-    if (shmaddr == (void*) -1) {
-        perror("shmat failed");
-        shmctl(shmid, IPC_RMID, NULL);
-        return {nullptr, -1};
-    }
-
-    labyrintti = reinterpret_cast<int (*)[LEVEYS]>(shmaddr);
-    memcpy(labyrintti, alkuLabyrintti, size);
-
-    return {shmaddr, shmid};
-}
-
-// Jaetun muistin vapautus
-void poistaJaettuLabyrintti(void* shmaddr, int shmid) {
-    if (shmdt(shmaddr) == -1) {
-        perror("shmdt failed");
-    }
-
-    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
-        perror("shmctl failed");
-    }
-
-    shmctl(shmget(IPC_PRIVATE, 0, 0), IPC_RMID, NULL);
-}
-
-void* tuottaja(void*) {
-    for (int viesti = 1; viesti <= 9; viesti++) {
-        unique_lock<mutex> lukko(puskuri.mtx);
-
-        // Odota jos puskuri on täynnä
-        puskuri.not_full.wait(lukko, []{ return puskuri.count < BUF_SIZE; });
-
-        // Lisää viesti puskuriin
-        puskuri.data[puskuri.head] = viesti;
-        puskuri.head = (puskuri.head + 1) % BUF_SIZE;
-        puskuri.count++;
-        cout << "Parent lähetti viestin: " << viesti << endl;
-
-        lukko.unlock();
-        puskuri.not_empty.notify_one(); // Ilmoita, että dataa on saatavilla
-
-        sleep(1);
-    }
-    return nullptr;
-}
-
-void* rotta(void* arg) {
-    int id = *(int*)arg;
-    for (int i = 0; i < 3; i++) {
-        unique_lock<mutex> lukko(puskuri.mtx);
-
-        // Odota jos puskuri on tyhjä
-        puskuri.not_empty.wait(lukko, []{ return puskuri.count > 0; });
-
-        // Lue viesti rengaspuskurista
-        int viesti = puskuri.data[puskuri.tail];
-        puskuri.tail = (puskuri.tail + 1) % BUF_SIZE;
-        puskuri.count--;
-        cout << "Rotta " << id << " sai viestin: " << viesti << endl;
-
-        lukko.unlock();
-        puskuri.not_full.notify_one(); // Ilmoita, että yksi paikka vapautui
-
-        sleep(1);
-    }
-    return nullptr;
+    return liikkuCount;
 }
 
 int main(){
-    //DEBUG: cout << "Ohjelma käynnistyy..." << endl;
-    
-    JaettuMuisti jm = luoJaettuLabyrintti(); // Luo jaettu labyrintti
-    if (!jm.shmaddr) return 1; // Virhe luonnissa
-
-    pthread_t tuottaja_sae;
-    pthread_t rotat[ROTAT];
-    int idt[ROTAT];
-
-    // Käynnistä säikeet
-    pthread_create(&tuottaja_sae, nullptr, tuottaja, nullptr);
-
-    for (int i = 0; i < ROTAT; i++) {
-        idt[i] = i + 1;
-        pthread_create(&rotat[i], nullptr, rotta, &idt[i]);
-    }
-
-    // Odota että kaikki säikeet valmistuvat
-    pthread_join(tuottaja_sae, nullptr);
-    for (int i = 0; i < ROTAT; i++) {
-        pthread_join(rotat[i], nullptr);
-    }
-
-    //viimeinen jäädytetty kuva sijaintikartasta olisi hyvä olla todistamassa sitä
+    aloitaRotta();
     std::cout << "Kaikki rotat ulkona!" << endl;
-
-    poistaJaettuLabyrintti(jm.shmaddr, jm.shmid); // Vapauta
-
     return 0;
 }
